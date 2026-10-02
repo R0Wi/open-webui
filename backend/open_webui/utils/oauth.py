@@ -62,7 +62,9 @@ from open_webui.config import (
     OAUTH_UPDATE_NAME_ON_LOGIN,
     OAUTH_UPDATE_PICTURE_ON_LOGIN,
     OAUTH_USERNAME_CLAIM,
+    OIDC_PROVIDER_CONFIG_KEYS,
     WEBHOOK_URL,
+    register_oidc_provider,
 )
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import (
@@ -1342,6 +1344,38 @@ class OAuthManager:
             client = provider_config['register'](self.oauth)
             self._clients[name] = client
 
+        # Effective OIDC connection settings the 'oidc' client is registered with.
+        self._oidc_settings = None
+
+    async def sync_oidc_provider(self):
+        """Re-register the generic OIDC provider when its effective connection
+        settings changed, e.g. after they were saved in the admin panel with
+        ENABLE_OAUTH_PERSISTENT_CONFIG enabled. Cheap when nothing changed, so it
+        can run per request and keeps all workers in sync with the DB."""
+        stored = await Config.get_many(*OIDC_PROVIDER_CONFIG_KEYS)
+        # Empty stored values fall back to the environment, so rows seeded empty
+        # by older versions don't disable an env-configured provider.
+        settings = {key: stored.get(key) or Config.default_value(key) for key in OIDC_PROVIDER_CONFIG_KEYS}
+        if settings == self._oidc_settings:
+            return
+
+        try:
+            register_oidc_provider(settings)
+        except Exception as e:
+            log.error(f'Invalid OIDC provider configuration, keeping previous registration: {e}')
+            self._oidc_settings = settings
+            return
+
+        self._clients.pop('oidc', None)
+        self.oauth._clients.pop('oidc', None)
+        self.oauth._registry.pop('oidc', None)
+        if 'oidc' in OAUTH_PROVIDERS:
+            self._clients['oidc'] = OAUTH_PROVIDERS['oidc']['register'](self.oauth)
+            log.info(f'Registered OIDC provider from {settings["oauth.provider_url"]}')
+        elif self._oidc_settings is not None:
+            log.info('OIDC provider removed: client ID, client secret or provider URL is not configured')
+        self._oidc_settings = settings
+
     def get_client(self, provider_name):
         if provider_name not in self._clients:
             self._clients[provider_name] = self.oauth.create_client(provider_name)
@@ -1464,6 +1498,7 @@ class OAuthManager:
             return None
 
         try:
+            await self.sync_oidc_provider()
             client = self.get_client(provider)
             if not client:
                 log.error(f'No OAuth client found for provider {provider}')
@@ -1561,6 +1596,13 @@ class OAuthManager:
                         claim_data = _get_roles_claim(token_claims, oauth_claim)
                     except jwt.PyJWTError as e:
                         log.debug('Token exchange: cannot decode token claims: %s', e)
+
+                if claim_data is None:
+                    log.warning(
+                        f"OAuth role management is enabled but the roles claim '{oauth_claim}' is missing "
+                        f"from the user info, keeping role '{role}'. Check that the provider releases this "
+                        f'claim (e.g. the required scope is included in OAUTH_SCOPES).'
+                    )
 
                 if isinstance(claim_data, list):
                     oauth_roles = claim_data
@@ -1851,6 +1893,7 @@ class OAuthManager:
         auth_config = await get_oauth_runtime_config()
         if not auth_config.ENABLE_OAUTH:
             raise HTTPException(404)
+        await self.sync_oidc_provider()
         if provider not in OAUTH_PROVIDERS:
             raise HTTPException(404)
         # If the provider has a custom redirect URL, use that, otherwise automatically generate one
@@ -1873,6 +1916,7 @@ class OAuthManager:
         auth_config = await get_oauth_runtime_config()
         if not auth_config.ENABLE_OAUTH:
             raise HTTPException(404)
+        await self.sync_oidc_provider()
         if provider not in OAUTH_PROVIDERS:
             raise HTTPException(404)
 
@@ -2303,6 +2347,7 @@ class OAuthManager:
         matched_client = None
         matched_jwks_uri = None
 
+        await self.sync_oidc_provider()
         for provider_name in OAUTH_PROVIDERS:
             client = self.get_client(provider_name)
             if not client:

@@ -366,6 +366,7 @@ async def lifespan(app: FastAPI):
     await import_legacy_config_json()
     await seed_registered_defaults()
     await initialize_runtime_config(app)
+    await app.state.oauth_manager.sync_oidc_provider()
     await migrate_legacy_webhook_config()
     await publish_event(app, EVENTS.SYSTEM_STARTUP_STARTED, source='system')
 
@@ -2253,6 +2254,7 @@ async def get_app_config(request: Request):
 
     license_metadata = getattr(app.state, 'LICENSE_METADATA', None)
     user_count = await Users.get_num_users() if license_metadata else None
+    await app.state.oauth_manager.sync_oidc_provider()
     config = await Config.get_many(
         'oauth.enable',
         'oauth.auto_redirect',

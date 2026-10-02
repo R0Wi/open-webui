@@ -2633,21 +2633,85 @@ if _oauth_authorize_params:
         log.warning('OAUTH_AUTHORIZE_PARAMS is not valid JSON, ignoring')
 
 
-def oauth_client_kwargs(scope: str, **kwargs):
+def oauth_client_kwargs(
+    scope: str,
+    timeout: str | int | None = None,
+    code_challenge_method: str | None = None,
+    **kwargs,
+):
+    timeout = OAUTH_TIMEOUT if timeout is None else timeout
+    code_challenge_method = OAUTH_CODE_CHALLENGE_METHOD if code_challenge_method is None else code_challenge_method
     client_kwargs = {
         'scope': scope,
         **kwargs,
-        **({'timeout': int(OAUTH_TIMEOUT)} if OAUTH_TIMEOUT else {}),
+        **({'timeout': int(timeout)} if timeout else {}),
     }
 
-    if OAUTH_CODE_CHALLENGE_METHOD == 'S256':
+    if code_challenge_method == 'S256':
         client_kwargs['code_challenge_method'] = 'S256'
-    elif OAUTH_CODE_CHALLENGE_METHOD:
+    elif code_challenge_method:
         raise Exception(
-            'Code challenge methods other than "%s" not supported. Given: "%s"' % ('S256', OAUTH_CODE_CHALLENGE_METHOD)
+            'Code challenge methods other than "%s" not supported. Given: "%s"' % ('S256', code_challenge_method)
         )
 
     return client_kwargs
+
+
+# Config keys that define the generic OIDC provider connection. They are read
+# back from the config store (DB when ENABLE_OAUTH_PERSISTENT_CONFIG is enabled)
+# by OAuthManager.sync_oidc_provider() so admin panel changes take effect.
+OIDC_PROVIDER_CONFIG_KEYS = (
+    'oauth.client_id',
+    'oauth.client_secret',
+    'oauth.provider_url',
+    'oauth.redirect_uri',
+    'oauth.scopes',
+    'oauth.timeout',
+    'oauth.token_endpoint_auth_method',
+    'oauth.code_challenge_method',
+    'oauth.provider_name',
+)
+
+
+def register_oidc_provider(settings: dict) -> None:
+    """(Re)build OAUTH_PROVIDERS['oidc'] from a {config key: value} mapping.
+
+    Removes the provider when the connection is incomplete. Raises on invalid
+    values (e.g. unsupported code challenge method) without touching the
+    current registration.
+    """
+    client_id = settings.get('oauth.client_id')
+    client_secret = settings.get('oauth.client_secret')
+    provider_url = settings.get('oauth.provider_url')
+    code_challenge_method = settings.get('oauth.code_challenge_method') or ''
+
+    if not (client_id and (client_secret or code_challenge_method) and provider_url):
+        OAUTH_PROVIDERS.pop('oidc', None)
+        return
+
+    token_endpoint_auth_method = settings.get('oauth.token_endpoint_auth_method')
+    client_kwargs = oauth_client_kwargs(
+        settings.get('oauth.scopes') or 'openid email profile',
+        timeout=settings.get('oauth.timeout') or '',
+        code_challenge_method=code_challenge_method,
+        **({'token_endpoint_auth_method': token_endpoint_auth_method} if token_endpoint_auth_method else {}),
+    )
+
+    def oidc_oauth_register(oauth: OAuth):
+        client = oauth.register(
+            name='oidc',
+            client_id=client_id,
+            client_secret=client_secret,
+            server_metadata_url=provider_url,
+            client_kwargs=dict(client_kwargs),
+            redirect_uri=settings.get('oauth.redirect_uri') or '',
+        )
+        return client
+
+    OAUTH_PROVIDERS['oidc'] = {
+        'name': settings.get('oauth.provider_name') or 'SSO',
+        'register': oidc_oauth_register,
+    }
 
 
 def load_oauth_providers():
@@ -2709,30 +2773,19 @@ def load_oauth_providers():
             'sub_claim': 'id',
         }
 
-    if OAUTH_CLIENT_ID and (OAUTH_CLIENT_SECRET or OAUTH_CODE_CHALLENGE_METHOD) and OPENID_PROVIDER_URL:
-
-        def oidc_oauth_register(oauth: OAuth):
-            client = oauth.register(
-                name='oidc',
-                client_id=OAUTH_CLIENT_ID,
-                client_secret=OAUTH_CLIENT_SECRET,
-                server_metadata_url=OPENID_PROVIDER_URL,
-                client_kwargs=oauth_client_kwargs(
-                    OAUTH_SCOPES,
-                    **(
-                        {'token_endpoint_auth_method': OAUTH_TOKEN_ENDPOINT_AUTH_METHOD}
-                        if OAUTH_TOKEN_ENDPOINT_AUTH_METHOD
-                        else {}
-                    ),
-                ),
-                redirect_uri=OPENID_REDIRECT_URI,
-            )
-            return client
-
-        OAUTH_PROVIDERS['oidc'] = {
-            'name': OAUTH_PROVIDER_NAME,
-            'register': oidc_oauth_register,
+    register_oidc_provider(
+        {
+            'oauth.client_id': OAUTH_CLIENT_ID,
+            'oauth.client_secret': OAUTH_CLIENT_SECRET,
+            'oauth.provider_url': OPENID_PROVIDER_URL,
+            'oauth.redirect_uri': OPENID_REDIRECT_URI,
+            'oauth.scopes': OAUTH_SCOPES,
+            'oauth.timeout': OAUTH_TIMEOUT,
+            'oauth.token_endpoint_auth_method': OAUTH_TOKEN_ENDPOINT_AUTH_METHOD,
+            'oauth.code_challenge_method': OAUTH_CODE_CHALLENGE_METHOD,
+            'oauth.provider_name': OAUTH_PROVIDER_NAME,
         }
+    )
 
     if FEISHU_CLIENT_ID and FEISHU_CLIENT_SECRET:
 

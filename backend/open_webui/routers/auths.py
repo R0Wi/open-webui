@@ -1511,6 +1511,7 @@ async def get_oauth_config(request: Request, user=Depends(get_admin_user)):
 @router.post('/admin/config/oauth', response_model=OAuthConfigResponse)
 async def update_oauth_config(request: Request, form_data: OAuthConfigForm, user=Depends(get_admin_user)):
     await Config.upsert(oauth_config_updates(form_data.model_dump(exclude_none=True)))
+    await request.app.state.oauth_manager.sync_oidc_provider()
     return await get_oauth_config_values()
 
 
@@ -1648,6 +1649,7 @@ async def token_exchange(
         )
 
     provider = provider.lower()
+    await request.app.state.oauth_manager.sync_oidc_provider()
 
     # Check if provider is configured
     if provider not in OAUTH_PROVIDERS:
