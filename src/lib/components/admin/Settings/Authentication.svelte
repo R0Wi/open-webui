@@ -625,7 +625,9 @@
 								<SensitiveInput
 									variant="settings"
 									placeholder={oauthEnvDefaults.OAUTH_CLIENT_SECRET
-										? $i18n.t('Set via environment variable')
+										? $i18n.t('Using {{ENV_VAR}} from environment', {
+												ENV_VAR: 'OAUTH_CLIENT_SECRET'
+											})
 										: $i18n.t('Enter Client Secret')}
 									required={false}
 									bind:value={oauthConfig.OAUTH_CLIENT_SECRET}
