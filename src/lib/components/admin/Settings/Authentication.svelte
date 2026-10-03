@@ -50,6 +50,8 @@
 
 	let oauthConfig: any = null;
 	$: oauthEditable = oauthConfig?.ENABLE_OAUTH_PERSISTENT_CONFIG ?? true;
+	// Env values used when an OIDC connection field is left empty, shown as placeholders.
+	$: oauthEnvDefaults = oauthConfig?.OAUTH_ENV_DEFAULTS ?? {};
 	const inputClass =
 		'w-full h-7 rounded-lg border border-gray-100/50 bg-gray-50/40 px-2 text-xs text-gray-700 outline-hidden transition-colors placeholder:text-gray-300 focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-gray-300 dark:placeholder:text-gray-700 dark:focus:border-blue-500';
 	const textareaClass =
@@ -571,6 +573,14 @@
 					</AdminSettingRow>
 
 					{#if oauthConfig.ENABLE_OAUTH}
+						{#if oauthEditable}
+							<div class="text-[0.6875rem] text-gray-500">
+								{$i18n.t(
+									'Leave a provider field empty to use its environment variable value, shown greyed out.'
+								)}
+							</div>
+						{/if}
+
 						<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 							<AdminSettingField
 								label={$i18n.t('settings.admin.authentication.providerName.label')}
@@ -578,7 +588,7 @@
 							>
 								<input
 									class={inputClass}
-									placeholder="SSO"
+									placeholder={oauthEnvDefaults.OAUTH_PROVIDER_NAME || 'SSO'}
 									bind:value={oauthConfig.OAUTH_PROVIDER_NAME}
 								/>
 							</AdminSettingField>
@@ -589,7 +599,8 @@
 							>
 								<input
 									class={inputClass}
-									placeholder="https://accounts.google.com/.well-known/openid-configuration"
+									placeholder={oauthEnvDefaults.OPENID_PROVIDER_URL ||
+										'https://accounts.google.com/.well-known/openid-configuration'}
 									bind:value={oauthConfig.OPENID_PROVIDER_URL}
 								/>
 							</AdminSettingField>
@@ -602,7 +613,7 @@
 							>
 								<input
 									class={inputClass}
-									placeholder={$i18n.t('Enter Client ID')}
+									placeholder={oauthEnvDefaults.OAUTH_CLIENT_ID || $i18n.t('Enter Client ID')}
 									bind:value={oauthConfig.OAUTH_CLIENT_ID}
 								/>
 							</AdminSettingField>
@@ -613,7 +624,11 @@
 							>
 								<SensitiveInput
 									variant="settings"
-									placeholder={$i18n.t('Enter Client Secret')}
+									placeholder={oauthEnvDefaults.OAUTH_CLIENT_SECRET
+										? $i18n.t('Using {{ENV_VAR}} from environment', {
+												ENV_VAR: 'OAUTH_CLIENT_SECRET'
+											})
+										: $i18n.t('Enter Client Secret')}
 									required={false}
 									bind:value={oauthConfig.OAUTH_CLIENT_SECRET}
 								/>
@@ -627,7 +642,8 @@
 							>
 								<input
 									class={inputClass}
-									placeholder={$i18n.t('Enter Redirect URI')}
+									placeholder={oauthEnvDefaults.OPENID_REDIRECT_URI ||
+										$i18n.t('Enter Redirect URI')}
 									bind:value={oauthConfig.OPENID_REDIRECT_URI}
 								/>
 							</AdminSettingField>
@@ -638,7 +654,7 @@
 							>
 								<input
 									class={inputClass}
-									placeholder="openid email profile"
+									placeholder={oauthEnvDefaults.OAUTH_SCOPES || 'openid email profile'}
 									bind:value={oauthConfig.OAUTH_SCOPES}
 								/>
 							</AdminSettingField>

@@ -18,6 +18,7 @@ from ldap3.utils.dn import parse_dn
 from open_webui.config import (
     ENABLE_PASSWORD_AUTH,
     OAUTH_PROVIDERS,
+    OIDC_PROVIDER_CONFIG_KEYS,
 )
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.events import EVENTS, publish_event
@@ -1488,6 +1489,13 @@ async def get_oauth_config_values() -> dict:
         if storage_key in values
     }
     form_values['ENABLE_OAUTH_PERSISTENT_CONFIG'] = Config.OAUTH_PERSISTENT_ENABLED
+    # Env values that empty OIDC connection fields fall back to (see
+    # OAuthManager.sync_oidc_provider). The client secret is only flagged.
+    form_values['OAUTH_ENV_DEFAULTS'] = {
+        field: True if field == 'OAUTH_CLIENT_SECRET' else default
+        for field, storage_key in OAUTH_CONFIG_KEYS.items()
+        if storage_key in OIDC_PROVIDER_CONFIG_KEYS and (default := Config.default_value(storage_key))
+    }
     return form_values
 
 
@@ -1501,6 +1509,7 @@ def oauth_config_updates(data: dict) -> dict:
 
 class OAuthConfigResponse(OAuthConfigForm):
     ENABLE_OAUTH_PERSISTENT_CONFIG: bool
+    OAUTH_ENV_DEFAULTS: dict[str, str | int | bool] = {}
 
 
 @router.get('/admin/config/oauth', response_model=OAuthConfigResponse)
@@ -1511,6 +1520,7 @@ async def get_oauth_config(request: Request, user=Depends(get_admin_user)):
 @router.post('/admin/config/oauth', response_model=OAuthConfigResponse)
 async def update_oauth_config(request: Request, form_data: OAuthConfigForm, user=Depends(get_admin_user)):
     await Config.upsert(oauth_config_updates(form_data.model_dump(exclude_none=True)))
+    await request.app.state.oauth_manager.sync_oidc_provider()
     return await get_oauth_config_values()
 
 
@@ -1648,6 +1658,7 @@ async def token_exchange(
         )
 
     provider = provider.lower()
+    await request.app.state.oauth_manager.sync_oidc_provider()
 
     # Check if provider is configured
     if provider not in OAUTH_PROVIDERS:
