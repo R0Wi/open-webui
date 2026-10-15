@@ -1363,6 +1363,14 @@ class OAuthClientManager:
         return response
 
 
+class TokenRefreshUnavailable(Exception):
+    """The provider could not answer a token refresh (network error, timeout, 5xx, 429).
+
+    Unlike a rejected grant, this says nothing about the refresh token itself,
+    so the session is kept and the next request tries again.
+    """
+
+
 class OAuthManager:
     def __init__(self, app):
         self.oauth = OAuth()
@@ -1439,7 +1447,20 @@ class OAuthManager:
                 or datetime.now() + timedelta(minutes=5) >= datetime.fromtimestamp(expires_at)
             ):
                 log.debug('Token refresh needed for user %s, provider %s', user_id, session.provider)
-                refreshed_token = await self._refresh_token(session)
+                try:
+                    refreshed_token = await self._refresh_token(session)
+                except TokenRefreshUnavailable as e:
+                    log.warning(
+                        'Token refresh for user %s, provider %s did not reach the provider, keeping session %s: %s',
+                        user_id,
+                        session.provider,
+                        session.id,
+                        e,
+                    )
+                    # The refresh is pre-emptive, so the current token may still be usable
+                    if expires_at is not None and datetime.now() < datetime.fromtimestamp(expires_at):
+                        return session.token
+                    return None
                 if refreshed_token:
                     return refreshed_token
                 else:
@@ -1491,6 +1512,8 @@ class OAuthManager:
                     log.error(f'Failed to refresh token for session {session.id}')
                     return None
 
+            except TokenRefreshUnavailable:
+                raise
             except Exception as e:
                 log.error(f'Error refreshing token for session {session.id}: {e}')
                 return None
@@ -1527,7 +1550,7 @@ class OAuthManager:
                         openid_data = await r.json()
                         token_endpoint = openid_data.get('token_endpoint')
                     else:
-                        log.error(f'Failed to fetch OpenID configuration for provider {provider}')
+                        raise TokenRefreshUnavailable(f'OpenID configuration returned {r.status}')
             if not token_endpoint:
                 log.error(f'No token endpoint found for provider {provider}')
                 return None
@@ -1571,9 +1594,15 @@ class OAuthManager:
                         return new_token_data
                     else:
                         error_text = await r.text()
+                        if r.status >= 500 or r.status == 429:
+                            raise TokenRefreshUnavailable(f'token endpoint returned {r.status} - {error_text}')
                         log.error(f'Token refresh failed for provider {provider}: {r.status} - {error_text}')
                         return None
 
+        except TokenRefreshUnavailable:
+            raise
+        except (aiohttp.ClientError, TimeoutError) as e:
+            raise TokenRefreshUnavailable(f'{type(e).__name__}: {e}') from e
         except Exception as e:
             log.error(f'Exception during token refresh for provider {provider}: {e}')
             return None
